@@ -12,6 +12,7 @@ from matplotlib.backends.backend_qt5agg import (
                             )
 from matplotlib.figure import Figure
 from matplotlib import cm
+from matplotlib.colors import Normalize
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.widgets import Slider, Button
@@ -50,16 +51,17 @@ class Arrow3D(FancyArrowPatch):
 def process_file ( datafile ):
     if datafile.suffix == '.csv':
         position_data = parse_datafile(datafile)
-    #    position_data = correct_drift(position_data)
+        position_data = correct_drift(position_data)
         metrics = calculate_metrics(position_data)
-        time_length = len(position_data.x[0,:,0])
+        time_length = position_data.x.shape[1]
         data_format = np.dtype([ ('i', int),
-                                 ('x', float, (time_length, 3)),
-                                 ('d', float, 3),
-                                 ('p', float, 3),
-                                 ('avg', float, 3),
-                                 ('corr', float),
-                                 ('curl', float, 3) ])
+                                  ('x', float, (time_length, 3)),
+                                  ('d', float, 3),
+                                  ('p', float, 3),
+                                  ('m', float, 3),
+                                  ('avg', float, 3),
+                                  ('corr', float),
+                                  ('curl', float, 3) ])
         data = np.empty(len(position_data.i),
                         dtype=data_format).view(np.recarray)
         data.i = position_data.i
@@ -70,6 +72,7 @@ def process_file ( datafile ):
         delta_x = data.x[:,-1,:] - data.x[:,0,:]
         data.corr, data.avg = calculate_correlation(data.x[:,-1,:], delta_x)
         data.curl = calculate_curl(data.x[:,-1,:], delta_x)
+        
         with open(datafile.with_suffix('.pkl'),'wb') as outstream:
             pickle.dump(data, outstream)
         return data
@@ -85,16 +88,16 @@ def process_file ( datafile ):
 
 def parse_datafile ( datafile ):
     file_data_format = np.dtype([ ('i', int), ('t', int),
-                             ('x', float, 3) ])
+                              ('x', float, 3) ])
     data = np.genfromtxt(datafile,
                             delimiter = ',', # names = True,
                             comments = '#',
-                        #    skip_header = 1,
+                            skip_header = 1,
                             usecols = (4,3,0,1,2),
                             dtype = file_data_format ).view(np.recarray)
     data.i = data.i - np.amin(data.i)
     data.t = data.t - np.amin(data.t)
-    time_max = 20
+    time_max = 30
     last_time = np.amax(data.t)
     data = np.sort(data, order = ['i', 't'])
     # Only want ones that were tracked for the entire time.
@@ -107,7 +110,6 @@ def parse_datafile ( datafile ):
             data.i = np.where(data.i > index, data.i-1, data.i)
         else:
             index += 1
-    #
     data_format = np.dtype([ ('i', int), ('x', float, (time_max+1,3)) ])
     restructured_data = np.zeros(np.amax(data.i)+1,
                                         dtype  = data_format).view(np.recarray)
@@ -131,7 +133,8 @@ def calculate_metrics ( data ):
     cell_ids = np.unique(data.i)
     metric_format = np.dtype([ ('i', int),
                                ('d', float, 3),
-                               ('p', float, 3) ])
+                               ('p', float, 3),
+                               ('m', float, 3) ])
     metrics = np.empty(len(cell_ids), dtype=metric_format).view(np.recarray)
     positions = np.array
     for index, cell_id in enumerate(cell_ids):
@@ -205,7 +208,8 @@ def plot_tracks ( data, ax, threshold ):
                                      linestyles = 'solid' )
     line_segments.set_array( np.linalg.norm(data.d, axis=1) )
     ax.add_collection(line_segments)
-    scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2],c=(0, 0.4470, 0.7410))
+    scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2],
+                                     color=(0, 0.4470, 0.7410))
     #plt.colorbar(line_segments, ax=ax)
     ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
     ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
@@ -228,16 +232,20 @@ def plot_diffusivity ( data, ax, threshold ):
     colormap = plt.get_cmap('viridis') # 'gist_rainbow'
     plt.set_cmap('viridis')
     metric = np.linalg.norm(data.d, axis=1)
+    minval = np.amin(metric)
+    maxval = np.amax(metric)
+    metric = metric / maxval
     cell_colors = colormap(metric)
     line_segments = Line3DCollection(np.stack([data.x[:,0,:],
                                                data.x[:,-1,:]],
                                         axis=1),
                                      cmap=colormap,
                                      linestyles = 'solid' )
-    line_segments.set_array(data.d)
+    line_segments.set_array(metric)
     ax.add_collection(line_segments)
     scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2])
-    plt.colorbar(line_segments, ax=ax)
+    plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
+                                   cmap=colormap), ax=ax)
     ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
     ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
     ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
@@ -259,16 +267,20 @@ def plot_persistence ( data, ax, threshold ):
     colormap = plt.get_cmap('viridis') # 'gist_rainbow'
     plt.set_cmap('viridis')
     metric = np.linalg.norm(data.p, axis=1)
+    minval = np.amin(metric)
+    maxval = np.amax(metric)
+    metric = metric / maxval
     cell_colors = colormap(metric)
     line_segments = Line3DCollection(np.stack([data.x[:,0,:],
                                                data.x[:,-1,:]],
                                         axis=1),
                                      cmap=colormap,
                                      linestyles = 'solid' )
-    line_segments.set_array(data.p)
+    line_segments.set_array(metric)
     ax.add_collection(line_segments)
     scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2])
-    plt.colorbar(line_segments, ax=ax)
+    plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
+                                   cmap=colormap), ax=ax)
     ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
     ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
     ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
@@ -283,12 +295,16 @@ def plot_persistence ( data, ax, threshold ):
     scatter_plot.set_color(np.where(mask[:,np.newaxis],
                                     cell_colors - [0,0,0,0.5],
                                     [[0.25,0.25,0.25,0.15]]))
+    
 
 ################################################################################
 
 def plot_correlation ( data, ax, threshold ):
     colormap = plt.get_cmap('viridis') # 'gist_rainbow'
     metric = data.corr
+    minval = np.amin(metric)
+    maxval = np.amax(metric)
+    metric = metric / maxval
     cell_colors = colormap(metric)
     line_segments = Line3DCollection(np.stack([data.x[:,0,:],
                                                data.x[:,-1,:]],
@@ -298,7 +314,8 @@ def plot_correlation ( data, ax, threshold ):
     line_segments.set_array(data.corr)
     ax.add_collection(line_segments)
     scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2])
-    plt.colorbar(line_segments, ax=ax)
+    plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
+                                   cmap=colormap), ax=ax)
     ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
     ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
     ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
@@ -321,6 +338,9 @@ def plot_deviation ( data, ax, threshold ):
     corrected = np.linalg.norm(data.x[:,-1,:] - data.avg - data.x[:,0,:],
                                 axis=1)
     metric = corrected / np.amax(corrected)
+    minval = np.amin(metric)
+    maxval = np.amax(metric)
+    metric = metric / maxval
     cell_colors = colormap(metric)
     tran_colors = cell_colors.copy()
     tran_colors[:,3] = 0.5
@@ -335,7 +355,8 @@ def plot_deviation ( data, ax, threshold ):
                                 data.x[:,-1,1],
                                 data.x[:,-1,2],
                                     s = 20 )
-    plt.colorbar(line_segments, ax=ax)
+    plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
+                                   cmap=colormap), ax=ax)
     ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
     ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
     ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
@@ -357,16 +378,20 @@ def plot_msd ( data, ax, threshold ):
     colormap = plt.get_cmap('viridis') # 'gist_rainbow'
     plt.set_cmap('viridis')
     metric = np.linalg.norm(data.m, axis=1)
+    minval = np.amin(metric)
+    maxval = np.amax(metric)
+    metric = metric / maxval
     cell_colors = colormap(metric)
     line_segments = Line3DCollection(np.stack([data.x[:,0,:],
                                                data.x[:,-1,:]],
                                         axis=1),
                                      cmap=colormap,
                                      linestyles = 'solid' )
-    line_segments.set_array(data.m)
+    line_segments.set_array(metric)
     ax.add_collection(line_segments)
     scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2])
-    plt.colorbar(line_segments, ax=ax)
+    plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
+                                   cmap=colormap), ax=ax)
     ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
     ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
     ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
@@ -394,6 +419,10 @@ class MPLCanvas(FigureCanvas):
                 QSizePolicy.Expanding,
                 QSizePolicy.Expanding)
         FigureCanvas.updateGeometry(self)
+    
+    def reset_ax (self):
+        self.fig.clf()
+        self.ax = self.fig.add_subplot(111, projection='3d')
 
 ################################################################################
 
@@ -473,17 +502,17 @@ class Window(QWidget):
         if file_name == '':
             return
         self.datafile = Path(file_name)
-        try:
-            self.data = process_file(self.datafile)
-            self.label_file_name.setText('File: ' + self.datafile.name)
-        except:
-            self.datafile = None
-            msg = QMessageBox()
-            msg.setIcon(QMessageBox.Critical)
-            msg.setText("Error")
-            msg.setInformativeText('Could not open file!')
-            msg.setWindowTitle("Error")
-            msg.exec_()
+        #try:
+        self.data = process_file(self.datafile)
+        self.label_file_name.setText('File: ' + self.datafile.name)
+#        except:
+#            self.datafile = None
+#            msg = QMessageBox()
+#            msg.setIcon(QMessageBox.Critical)
+#            msg.setText("Error")
+#            msg.setInformativeText('Could not open file!')
+#            msg.setWindowTitle("Error")
+#            msg.exec_()
     
     def slider_select (self):
         if self.data is not None:
@@ -528,6 +557,7 @@ class Window(QWidget):
             if collection.colorbar is not None:
                 collection.colorbar.remove()
         self.canvas.ax.clear()
+        self.canvas.reset_ax()
         if self.plot_type == 'None':
             return
         elif self.plot_type == 'Cell Tracks':
