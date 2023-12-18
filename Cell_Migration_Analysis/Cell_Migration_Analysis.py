@@ -5,6 +5,7 @@ import pickle
 import numpy as np
 import matplotlib
 matplotlib.use('Qt5Agg')
+matplotlib.interactive(False)
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qt5agg import (
                             FigureCanvasQTAgg as FigureCanvas,
@@ -51,27 +52,33 @@ class Arrow3D(FancyArrowPatch):
 def process_file ( datafile ):
     if datafile.suffix == '.csv':
         position_data = parse_datafile(datafile)
-        position_data = correct_drift(position_data)
+        # position_data = correct_drift(position_data)
         metrics = calculate_metrics(position_data)
-        time_length = position_data.x.shape[1]
+        # time_length = position_data.x.shape[1]
         data_format = np.dtype([ ('i', int),
-                                  ('x', float, (time_length, 3)),
+                                  ('x', object),
                                   ('d', float, 3),
                                   ('p', float, 3),
                                   ('m', float, 3),
                                   ('avg', float, 3),
                                   ('corr', float),
                                   ('curl', float, 3) ])
-        data = np.empty(len(position_data.i),
+        data = np.empty(np.unique(position_data.i).size,
                         dtype=data_format).view(np.recarray)
         data.i = position_data.i
         data.x = position_data.x
         data.d = metrics.d
         data.p = metrics.p
         data.m = metrics.m
-        delta_x = data.x[:,-1,:] - data.x[:,0,:]
-        data.corr, data.avg = calculate_correlation(data.x[:,-1,:], delta_x)
-        data.curl = calculate_curl(data.x[:,-1,:], delta_x)
+        # delta_x = np.empty(np.unique(position_data.i).size, float, 3)
+        delta_x = np.empty((np.unique(position_data.i).size, 3))
+        end_x = np.empty((np.unique(position_data.i).size, 3))
+        for index in np.unique(position_data.i):
+            delta_x[index] = data[index].x[-1] - data[index].x[0]
+            end_x[index]=data[index].x[-1]
+        # print(delta_x)
+        data.corr, data.avg = calculate_correlation(end_x, delta_x)
+        data.curl = calculate_curl(end_x, delta_x)
         
         with open(datafile.with_suffix('.pkl'),'wb') as outstream:
             pickle.dump(data, outstream)
@@ -97,25 +104,97 @@ def parse_datafile ( datafile ):
                             dtype = file_data_format ).view(np.recarray)
     data.i = data.i - np.amin(data.i)
     data.t = data.t - np.amin(data.t)
-    time_max = 30
+    time_min = 20
     last_time = np.amax(data.t)
     data = np.sort(data, order = ['i', 't'])
     # Only want ones that were tracked for the entire time.
-    for time in range(time_max+1,last_time+1):
-        data = np.delete(data, np.argwhere(data.t == time))
+    # for time in range(time_min+1,last_time+1):
+    #     data = np.delete(data, np.argwhere(data.t == time))
     index = 0
     while index <= np.amax(data.i):
-        if data[data.i == index].size < time_max+1:
+        if data[data.i == index].size < time_min+1:
             data = np.delete(data, np.argwhere(data.i == index))
             data.i = np.where(data.i > index, data.i-1, data.i)
         else:
             index += 1
-    data_format = np.dtype([ ('i', int), ('x', float, (time_max+1,3)) ])
-    restructured_data = np.zeros(np.amax(data.i)+1,
+    data_format = np.dtype([ ('i', int), ('x', object) ])
+    restructured_data = np.zeros(np.unique(data.i).size,
+                                        dtype  = data_format).view(np.recarray)
+    for index in np.unique(data.i):
+        restructured_data[index] = (index, data[data.i==index].x)
+    # restructured_data = []
+    # for index in np.unique(data.i):
+    #     subset_data = data[data.i == index]
+    #     entry = {'i': index, 'x': subset_data.x}
+    #     restructured_data.append(entry)
+    # print ([entry['i'] for entry in restructured_data])
+    # print (restructured_data.x)
+    return restructured_data
+
+################################################################################
+# to do time range reset
+def re_parse_datafile ( datafile , time_min , time_max):
+    file_data_format = np.dtype([ ('i', int), ('t', int),
+                              ('x', float, 3) ])
+    data = np.genfromtxt(datafile,
+                            delimiter = ',', # names = True,
+                            comments = '#',
+                            skip_header = 1,
+                            usecols = (4,3,0,1,2),
+                            dtype = file_data_format ).view(np.recarray)
+    data.i = data.i - np.amin(data.i)
+    data.t = data.t - np.amin(data.t)
+    time_min = 30
+    data = np.sort(data, order = ['i', 't'])
+    # Only want ones that were tracked for the entire time.
+    for time in range(time_min+1,time_max+1):
+        data = np.delete(data, np.argwhere(data.t == time))
+    # index = 0
+    # while index <= np.amax(data.i):
+    #     if data[data.i == index].size < time_min+1:
+    #         data = np.delete(data, np.argwhere(data.i == index))
+    #         data.i = np.where(data.i > index, data.i-1, data.i)
+    #     else:
+    #         index += 1
+    data_format = np.dtype([ ('i', int), ('x', object) ])
+    restructured_data = np.zeros(np.unique(data.i).size,
                                         dtype  = data_format).view(np.recarray)
     for index in np.unique(data.i):
         restructured_data[index] = (index, data[data.i==index].x)
     return restructured_data
+
+################################################################################
+
+def re_process_file ( datafile , time_min , time_max ):
+    position_data = re_parse_datafile(datafile , time_min , time_max)
+    # position_data = correct_drift(position_data)
+    metrics = calculate_metrics(position_data)
+    # time_length = position_data.x.shape[1]
+    data_format = np.dtype([ ('i', int),
+                                  ('x', object),
+                                  ('d', float, 3),
+                                  ('p', float, 3),
+                                  ('m', float, 3),
+                                  ('avg', float, 3),
+                                  ('corr', float),
+                                  ('curl', float, 3) ])
+    data = np.empty(np.unique(position_data.i).size,
+                        dtype=data_format).view(np.recarray)
+    data.i = position_data.i
+    data.x = position_data.x
+    data.d = metrics.d
+    data.p = metrics.p
+    data.m = metrics.m
+    # delta_x = np.empty(np.unique(position_data.i).size, float, 3)
+    delta_x = np.empty((np.unique(position_data.i).size, 3))
+    end_x = np.empty((np.unique(position_data.i).size, 3))
+    for index in np.unique(position_data.i):
+        delta_x[index] = data[index].x[-1] - data[index].x[0]
+        end_x[index]=data[index].x[-1]
+        # print(delta_x)
+    data.corr, data.avg = calculate_correlation(end_x, delta_x)
+    data.curl = calculate_curl(end_x, delta_x)
+    return data
 
 ################################################################################
 
@@ -130,7 +209,7 @@ def correct_drift ( data ):
 ################################################################################
 
 def calculate_metrics ( data ):
-    cell_ids = np.unique(data.i)
+    cell_ids = [entry['i'] for entry in data]
     metric_format = np.dtype([ ('i', int),
                                ('d', float, 3),
                                ('p', float, 3),
@@ -138,17 +217,23 @@ def calculate_metrics ( data ):
     metrics = np.empty(len(cell_ids), dtype=metric_format).view(np.recarray)
     positions = np.array
     for index, cell_id in enumerate(cell_ids):
-        time_max = data[data['i']==cell_id].size
-        p_0 = data[data.i==cell_id].x[0][0,:]
-        p_n = data[data.i==cell_id].x[0][-1,:]
+        
+        time_max = len(data[index]['x'])
+
+        
+        p_0 = data[index]['x'][0,:]
+        p_n = data[index]['x'][-1,:]
+        # print(p_0)
         path_length = np.sum(np.linalg.norm(
-                            data[data.i==cell_id].x[0][1:,:] - \
-                            data[data.i==cell_id].x[0][:-1,:], axis=1))
+                            data[index]['x'][1:,:] - \
+                            data[index]['x'][:-1,:], axis=1))
+        
         delta_x = p_n - p_0
         metrics[index].i = cell_id
-        metrics[index].d = np.linalg.norm(delta_x)**2 / (6 * time_max)
-        metrics[index].p = np.linalg.norm(delta_x)/ path_length
+        metrics[index].d = delta_x * np.linalg.norm(delta_x)  / (6 * time_max)
+        metrics[index].p = delta_x/ path_length
         metrics[index].m = np.linalg.norm(delta_x)**2
+        
     return metrics
 
 ################################################################################
@@ -208,16 +293,19 @@ def plot_tracks ( data, ax, threshold ):
                                      linestyles = 'solid' )
     line_segments.set_array( np.linalg.norm(data.d, axis=1) )
     ax.add_collection(line_segments)
-    scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2],
-                                     color=(0, 0.4470, 0.7410))
-    #plt.colorbar(line_segments, ax=ax)
-    ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
-    ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
-    ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
+    last_points = np.vstack([entry[-1] for entry in data.x])
+    scatter_plot = ax.scatter(last_points[:, 0], last_points[:, 1], last_points[:, 2], 
+                              color=(0, 0.4470, 0.7410))
+    all_points = np.concatenate(data.x)
+    ax.set_xlim([np.amin(all_points[:, 0]), np.amax(all_points[:, 0])])
+    ax.set_ylim([np.amin(all_points[:, 1]), np.amax(all_points[:, 1])])
+    ax.set_zlim([np.amin(all_points[:, 2]), np.amax(all_points[:, 2])])
+
+    # Set aspect and box aspect
     ax.set_aspect('auto')
-    ax.set_box_aspect((np.amax(data.x[:,:,0]) - np.amin(data.x[:,:,0]),
-                       np.amax(data.x[:,:,1]) - np.amin(data.x[:,:,1]),
-                       np.amax(data.x[:,:,2]) - np.amin(data.x[:,:,2])))
+    ax.set_box_aspect((np.amax(all_points[:, 0]) - np.amin(all_points[:, 0]),
+                   np.amax(all_points[:, 1]) - np.amin(all_points[:, 1]),
+                   np.amax(all_points[:, 2]) - np.amin(all_points[:, 2])))
     #mask = metric > threshold
     #line_segments.set_color(np.where(mask[:,np.newaxis],
     #                                 cell_colors,
@@ -236,23 +324,31 @@ def plot_diffusivity ( data, ax, threshold ):
     maxval = np.amax(metric)
     metric = metric / maxval
     cell_colors = colormap(metric)
-    line_segments = Line3DCollection(np.stack([data.x[:,0,:],
-                                               data.x[:,-1,:]],
-                                        axis=1),
+    line_segments = Line3DCollection(data.x,
                                      cmap=colormap,
                                      linestyles = 'solid' )
+    # line_segments = Line3DCollection(np.stack([data.x[:,0,:],
+    #                                            data.x[:,-1,:]],
+    #                                     axis=1),
+    #                                  cmap=colormap,
+    #                                  linestyles = 'solid' )
     line_segments.set_array(metric)
     ax.add_collection(line_segments)
-    scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2])
+    last_points = np.vstack([entry[-1] for entry in data.x])
+    scatter_plot = ax.scatter(last_points[:, 0], last_points[:, 1], last_points[:, 2], 
+                              color=(0, 0.4470, 0.7410))
     plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
                                    cmap=colormap), ax=ax)
-    ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
-    ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
-    ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
+    all_points = np.concatenate(data.x)
+    ax.set_xlim([np.amin(all_points[:, 0]), np.amax(all_points[:, 0])])
+    ax.set_ylim([np.amin(all_points[:, 1]), np.amax(all_points[:, 1])])
+    ax.set_zlim([np.amin(all_points[:, 2]), np.amax(all_points[:, 2])])
+
+    # Set aspect and box aspect
     ax.set_aspect('auto')
-    ax.set_box_aspect((np.amax(data.x[:,:,0]) - np.amin(data.x[:,:,0]),
-                       np.amax(data.x[:,:,1]) - np.amin(data.x[:,:,1]),
-                       np.amax(data.x[:,:,2]) - np.amin(data.x[:,:,2])))
+    ax.set_box_aspect((np.amax(all_points[:, 0]) - np.amin(all_points[:, 0]),
+                   np.amax(all_points[:, 1]) - np.amin(all_points[:, 1]),
+                   np.amax(all_points[:, 2]) - np.amin(all_points[:, 2])))
     mask = metric > threshold
     line_segments.set_color(np.where(mask[:,np.newaxis],
                                      cell_colors,
@@ -271,23 +367,31 @@ def plot_persistence ( data, ax, threshold ):
     maxval = np.amax(metric)
     metric = metric / maxval
     cell_colors = colormap(metric)
-    line_segments = Line3DCollection(np.stack([data.x[:,0,:],
-                                               data.x[:,-1,:]],
-                                        axis=1),
+    line_segments = Line3DCollection(data.x,
                                      cmap=colormap,
                                      linestyles = 'solid' )
+    # line_segments = Line3DCollection(np.stack([data.x[:,0,:],
+    #                                            data.x[:,-1,:]],
+    #                                     axis=1),
+    #                                  cmap=colormap,
+    #                                  linestyles = 'solid' )
     line_segments.set_array(metric)
     ax.add_collection(line_segments)
-    scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2])
+    last_points = np.vstack([entry[-1] for entry in data.x])
+    scatter_plot = ax.scatter(last_points[:, 0], last_points[:, 1], last_points[:, 2], 
+                              color=(0, 0.4470, 0.7410))
     plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
                                    cmap=colormap), ax=ax)
-    ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
-    ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
-    ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
+    all_points = np.concatenate(data.x)
+    ax.set_xlim([np.amin(all_points[:, 0]), np.amax(all_points[:, 0])])
+    ax.set_ylim([np.amin(all_points[:, 1]), np.amax(all_points[:, 1])])
+    ax.set_zlim([np.amin(all_points[:, 2]), np.amax(all_points[:, 2])])
+
+    # Set aspect and box aspect
     ax.set_aspect('auto')
-    ax.set_box_aspect((np.amax(data.x[:,:,0]) - np.amin(data.x[:,:,0]),
-                       np.amax(data.x[:,:,1]) - np.amin(data.x[:,:,1]),
-                       np.amax(data.x[:,:,2]) - np.amin(data.x[:,:,2])))
+    ax.set_box_aspect((np.amax(all_points[:, 0]) - np.amin(all_points[:, 0]),
+                   np.amax(all_points[:, 1]) - np.amin(all_points[:, 1]),
+                   np.amax(all_points[:, 2]) - np.amin(all_points[:, 2])))
     mask = metric > threshold
     line_segments.set_color(np.where(mask[:,np.newaxis],
                                      cell_colors,
@@ -306,23 +410,31 @@ def plot_correlation ( data, ax, threshold ):
     maxval = np.amax(metric)
     metric = metric / maxval
     cell_colors = colormap(metric)
-    line_segments = Line3DCollection(np.stack([data.x[:,0,:],
-                                               data.x[:,-1,:]],
-                                        axis=1),
+    line_segments = Line3DCollection(data.x,
                                      cmap=colormap,
                                      linestyles = 'solid' )
-    line_segments.set_array(data.corr)
+    # line_segments = Line3DCollection(np.stack([data.x[:,0,:],
+    #                                            data.x[:,-1,:]],
+    #                                     axis=1),
+    #                                  cmap=colormap,
+    #                                  linestyles = 'solid' )
+    line_segments.set_array(metric)
     ax.add_collection(line_segments)
-    scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2])
+    last_points = np.vstack([entry[-1] for entry in data.x])
+    scatter_plot = ax.scatter(last_points[:, 0], last_points[:, 1], last_points[:, 2], 
+                              color=(0, 0.4470, 0.7410))
     plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
                                    cmap=colormap), ax=ax)
-    ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
-    ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
-    ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
+    all_points = np.concatenate(data.x)
+    ax.set_xlim([np.amin(all_points[:, 0]), np.amax(all_points[:, 0])])
+    ax.set_ylim([np.amin(all_points[:, 1]), np.amax(all_points[:, 1])])
+    ax.set_zlim([np.amin(all_points[:, 2]), np.amax(all_points[:, 2])])
+
+    # Set aspect and box aspect
     ax.set_aspect('auto')
-    ax.set_box_aspect((np.amax(data.x[:,:,0]) - np.amin(data.x[:,:,0]),
-                       np.amax(data.x[:,:,1]) - np.amin(data.x[:,:,1]),
-                       np.amax(data.x[:,:,2]) - np.amin(data.x[:,:,2])))
+    ax.set_box_aspect((np.amax(all_points[:, 0]) - np.amin(all_points[:, 0]),
+                   np.amax(all_points[:, 1]) - np.amin(all_points[:, 1]),
+                   np.amax(all_points[:, 2]) - np.amin(all_points[:, 2])))
     mask = metric > threshold
     line_segments.set_color(np.where(mask[:,np.newaxis],
                                      cell_colors,
@@ -334,8 +446,10 @@ def plot_correlation ( data, ax, threshold ):
 ################################################################################
 
 def plot_deviation ( data, ax, threshold ):
+    first_points = np.vstack([entry[0] for entry in data.x])
+    last_points = np.vstack([entry[-1] for entry in data.x])
     colormap = plt.get_cmap('viridis') # 'gist_rainbow' 'brg'
-    corrected = np.linalg.norm(data.x[:,-1,:] - data.avg - data.x[:,0,:],
+    corrected = np.linalg.norm(last_points - data.avg - first_points,
                                 axis=1)
     metric = corrected / np.amax(corrected)
     minval = np.amin(metric)
@@ -344,26 +458,35 @@ def plot_deviation ( data, ax, threshold ):
     cell_colors = colormap(metric)
     tran_colors = cell_colors.copy()
     tran_colors[:,3] = 0.5
+    # line_segments = Line3DCollection(
+    #                         np.stack([data.x[:,0,:] + data.avg,
+    #                                   data.x[:,-1,:]],
+    #                                     axis=1),
+    #                                 cmap=colormap,
+    #                                 linestyles = 'solid' )
+
     line_segments = Line3DCollection(
-                            np.stack([data.x[:,0,:] + data.avg,
-                                      data.x[:,-1,:]],
+                            np.stack([first_points + data.avg,
+                                      last_points],
                                         axis=1),
                                     cmap=colormap,
                                     linestyles = 'solid' )
+    line_segments.set_array(metric)
     ax.add_collection(line_segments)
-    scatter_plot = ax.scatter(data.x[:,-1,0],
-                                data.x[:,-1,1],
-                                data.x[:,-1,2],
-                                    s = 20 )
+    scatter_plot = ax.scatter(last_points[:, 0], last_points[:, 1], last_points[:, 2], 
+                              color=(0, 0.4470, 0.7410))
     plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
                                    cmap=colormap), ax=ax)
-    ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
-    ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
-    ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
+    all_points = np.concatenate(data.x)
+    ax.set_xlim([np.amin(all_points[:, 0]), np.amax(all_points[:, 0])])
+    ax.set_ylim([np.amin(all_points[:, 1]), np.amax(all_points[:, 1])])
+    ax.set_zlim([np.amin(all_points[:, 2]), np.amax(all_points[:, 2])])
+
+    # Set aspect and box aspect
     ax.set_aspect('auto')
-    ax.set_box_aspect((np.amax(data.x[:,:,0]) - np.amin(data.x[:,:,0]),
-                       np.amax(data.x[:,:,1]) - np.amin(data.x[:,:,1]),
-                       np.amax(data.x[:,:,2]) - np.amin(data.x[:,:,2])))
+    ax.set_box_aspect((np.amax(all_points[:, 0]) - np.amin(all_points[:, 0]),
+                   np.amax(all_points[:, 1]) - np.amin(all_points[:, 1]),
+                   np.amax(all_points[:, 2]) - np.amin(all_points[:, 2])))
     mask = metric > threshold
     line_segments.set_color(np.where(mask[:,np.newaxis],
                                      cell_colors,
@@ -382,23 +505,31 @@ def plot_msd ( data, ax, threshold ):
     maxval = np.amax(metric)
     metric = metric / maxval
     cell_colors = colormap(metric)
-    line_segments = Line3DCollection(np.stack([data.x[:,0,:],
-                                               data.x[:,-1,:]],
-                                        axis=1),
+    line_segments = Line3DCollection(data.x,
                                      cmap=colormap,
                                      linestyles = 'solid' )
+    # line_segments = Line3DCollection(np.stack([data.x[:,0,:],
+    #                                            data.x[:,-1,:]],
+    #                                     axis=1),
+    #                                  cmap=colormap,
+    #                                  linestyles = 'solid' )
     line_segments.set_array(metric)
     ax.add_collection(line_segments)
-    scatter_plot = ax.scatter(data.x[:,-1,0],data.x[:,-1,1],data.x[:,-1,2])
+    last_points = np.vstack([entry[-1] for entry in data.x])
+    scatter_plot = ax.scatter(last_points[:, 0], last_points[:, 1], last_points[:, 2], 
+                              color=(0, 0.4470, 0.7410))
     plt.colorbar(cm.ScalarMappable(norm=Normalize(minval, maxval),
                                    cmap=colormap), ax=ax)
-    ax.set_xlim([ np.amin(data.x[:,:,0]), np.amax(data.x[:,:,0]) ])
-    ax.set_ylim([ np.amin(data.x[:,:,1]), np.amax(data.x[:,:,1]) ])
-    ax.set_zlim([ np.amin(data.x[:,:,2]), np.amax(data.x[:,:,2]) ])
+    all_points = np.concatenate(data.x)
+    ax.set_xlim([np.amin(all_points[:, 0]), np.amax(all_points[:, 0])])
+    ax.set_ylim([np.amin(all_points[:, 1]), np.amax(all_points[:, 1])])
+    ax.set_zlim([np.amin(all_points[:, 2]), np.amax(all_points[:, 2])])
+
+    # Set aspect and box aspect
     ax.set_aspect('auto')
-    ax.set_box_aspect((np.amax(data.x[:,:,0]) - np.amin(data.x[:,:,0]),
-                       np.amax(data.x[:,:,1]) - np.amin(data.x[:,:,1]),
-                       np.amax(data.x[:,:,2]) - np.amin(data.x[:,:,2])))
+    ax.set_box_aspect((np.amax(all_points[:, 0]) - np.amin(all_points[:, 0]),
+                   np.amax(all_points[:, 1]) - np.amin(all_points[:, 1]),
+                   np.amax(all_points[:, 2]) - np.amin(all_points[:, 2])))
     mask = metric > threshold
     line_segments.set_color(np.where(mask[:,np.newaxis],
                                      cell_colors,
@@ -406,7 +537,49 @@ def plot_msd ( data, ax, threshold ):
     scatter_plot.set_color(np.where(mask[:,np.newaxis],
                                     cell_colors - [0,0,0,0.5],
                                     [[0.25,0.25,0.25,0.15]]))
-                                    
+
+################################################################################
+
+def setup_textbox (function, layout, label_text,
+                   initial_value = 0):
+    textbox = QLineEdit()
+    need_inner = not isinstance(layout, QHBoxLayout)
+    if need_inner:
+        inner_layout = QHBoxLayout()
+    label = QLabel(label_text)
+    label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    if need_inner:
+        inner_layout.addWidget(label)
+    else:
+        layout.addWidget(label)
+    textbox.setMaxLength(4)
+    textbox.setFixedWidth(50)
+    textbox.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    textbox.setValidator(QIntValidator())
+    textbox.setText(str(initial_value))
+    textbox.editingFinished.connect(function)
+    if need_inner:
+        inner_layout.addWidget(textbox)
+        layout.addLayout(inner_layout)
+    else:
+        layout.addWidget(textbox)
+    return textbox
+
+################################################################################
+
+def get_textbox (textbox,
+                 minimum_value = None,
+                 maximum_value = None):
+    value = int(textbox.text())
+    if maximum_value is not None:
+        if value > maximum_value:
+            value = maximum_value
+    if minimum_value is not None:
+        if value < minimum_value:
+            value = minimum_value
+    textbox.setText(str(value))
+    return value
+
 ################################################################################
 
 class MPLCanvas(FigureCanvas):
@@ -423,6 +596,7 @@ class MPLCanvas(FigureCanvas):
     def reset_ax (self):
         self.fig.clf()
         self.ax = self.fig.add_subplot(111, projection='3d')
+    
 
 ################################################################################
 
@@ -461,6 +635,17 @@ class Window(QWidget):
         self.label_file_name = QLabel('No file loaded.')
         self.label_file_name.setAlignment(Qt.AlignCenter)
         upper_layout.addWidget(self.label_file_name)
+
+        self.textbox_t_min = setup_textbox(
+                            self.bound_textbox_select,
+                            upper_layout, 'Time Min:')
+        self.textbox_t_max = setup_textbox(
+                            self.bound_textbox_select,
+                            upper_layout, 'Time Max:')
+        self.reset_time = QPushButton()
+        self.reset_time.setText('Reset time')
+        self.reset_time.clicked.connect(self.reset_time_bounds)
+        upper_layout.addWidget(self.reset_time)
         lower_layout = QHBoxLayout()
         self.button_cell_tracks = QPushButton()
         self.button_cell_tracks.setText('Cell Tracks')
@@ -491,6 +676,19 @@ class Window(QWidget):
         outer_layout.addLayout(lower_layout)
         self.setLayout(outer_layout)
     
+    def bound_textbox_select (self):
+        self.t_min = get_textbox(self.textbox_t_min)
+        self.t_max = get_textbox(self.textbox_t_max)
+        # print(self.t_min)
+        # print(self.t_max)
+        return 
+    
+    def reset_time_bounds (self):
+        if self.data is not None:
+            self.data = re_process_file(self.datafile, self.t_min, self.t_max)
+            print('Time reset')
+        return
+        
     def open_file (self):
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
@@ -587,3 +785,5 @@ if __name__ == '__main__':
 
 ################################################################################
 # EOF
+
+# to do 1. add detected t_min and t_max. 2. Toggle at current view. 3. Colormap reset and label.
